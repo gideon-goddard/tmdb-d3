@@ -214,32 +214,6 @@ header p {
     transform: none;
 }
 
-#stopBtn {
-    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-    color: white;
-    border: none;
-    padding: 12px 30px;
-    border-radius: 8px;
-    font-size: 16px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    min-width: 150px;
-    margin-left: 10px;
-}
-
-#stopBtn:enabled:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(231, 76, 60, 0.3);
-}
-
-#stopBtn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    transform: none;
-    background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
-}
-
 .path-selector {
     display: flex;
     align-items: center;
@@ -594,7 +568,7 @@ header p {
         min-width: auto;
     }
     
-    #searchBtn, #stopBtn {
+    #searchBtn {
         min-width: auto;
         width: 100%;
         margin: 5px 0;
