@@ -38,25 +38,38 @@ class TMDBClient:
         
     async def search_person(self, name: str) -> Optional[Dict]:
         """Search for a person by name"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/search/person",
-                params={"api_key": self.api_key, "query": name}
-            )
-            data = response.json()
-            if data["results"]:
-                return data["results"][0]  # Return first match
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/search/person",
+                    params={"api_key": self.api_key, "query": name}
+                )
+                response.raise_for_status()
+                data = response.json()
+                print(f"Search for '{name}' returned {len(data.get('results', []))} results")
+                if data["results"]:
+                    return data["results"][0]  # Return first match
+                return None
+        except Exception as e:
+            print(f"Error searching for person '{name}': {e}")
             return None
     
     async def get_person_movies(self, person_id: int) -> List[Dict]:
         """Get movies for a person"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/person/{person_id}/movie_credits",
-                params={"api_key": self.api_key}
-            )
-            data = response.json()
-            return data.get("cast", [])
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/person/{person_id}/movie_credits",
+                    params={"api_key": self.api_key}
+                )
+                response.raise_for_status()
+                data = response.json()
+                movies = data.get("cast", [])
+                print(f"Found {len(movies)} movies for person {person_id}")
+                return movies
+        except Exception as e:
+            print(f"Error getting movies for person {person_id}: {e}")
+            return []
     
     async def get_movie_cast(self, movie_id: int) -> List[Dict]:
         """Get cast for a movie"""
@@ -75,6 +88,8 @@ class ActorConnectionFinder:
     async def find_connections(self, actor1_name: str, actor2_name: str, websocket: WebSocket):
         """Find connections between two actors using bidirectional BFS"""
         try:
+            print(f"Starting search for connections between '{actor1_name}' and '{actor2_name}'")
+            
             # Search for actors
             actor1 = await self.tmdb.search_person(actor1_name)
             actor2 = await self.tmdb.search_person(actor2_name)
@@ -86,6 +101,8 @@ class ActorConnectionFinder:
             if not actor2:
                 await websocket.send_text(json.dumps({"error": f"Actor '{actor2_name}' not found"}))
                 return
+            
+            print(f"Found actors: {actor1['name']} (ID: {actor1['id']}) and {actor2['name']} (ID: {actor2['id']})")
             
             await websocket.send_text(json.dumps({
                 "type": "actors_found",
@@ -245,20 +262,26 @@ async def read_root():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time communication"""
     await websocket.accept()
+    print("WebSocket connection accepted")
     
     try:
         while True:
             data = await websocket.receive_text()
+            print(f"Received WebSocket message: {data}")
             message = json.loads(data)
             
             if message["type"] == "find_connections":
                 actor1 = message["actor1"]
                 actor2 = message["actor2"]
+                print(f"Processing connection request: {actor1} -> {actor2}")
                 
                 await connection_finder.find_connections(actor1, actor2, websocket)
                 
     except WebSocketDisconnect:
         print("WebSocket disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await websocket.send_text(json.dumps({"error": f"Server error: {str(e)}"}))
 
 if __name__ == "__main__":
     import uvicorn
