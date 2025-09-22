@@ -85,10 +85,10 @@ class ActorConnectionFinder:
     def __init__(self):
         self.tmdb = TMDBClient()
     
-    async def find_connections(self, actor1_name: str, actor2_name: str, websocket: WebSocket):
+    async def find_connections(self, actor1_name: str, actor2_name: str, max_depth: int, websocket: WebSocket):
         """Find connections between two actors using bidirectional BFS"""
         try:
-            print(f"Starting search for connections between '{actor1_name}' and '{actor2_name}'")
+            print(f"Starting search for connections between '{actor1_name}' and '{actor2_name}' (max depth: {max_depth})")
             
             # Search for actors
             await websocket.send_text(json.dumps({
@@ -118,7 +118,7 @@ class ActorConnectionFinder:
             }))
             
             # Find all connection paths first
-            paths = await self._find_all_paths(actor1, actor2, websocket)
+            paths = await self._find_all_paths(actor1, actor2, max_depth, websocket)
             
             if paths:
                 await websocket.send_text(json.dumps({
@@ -196,7 +196,7 @@ class ActorConnectionFinder:
             print(f"Error in find_connections: {e}")
             await websocket.send_text(json.dumps({"error": str(e)}))
     
-    async def _find_all_paths(self, actor1, actor2, websocket):
+    async def _find_all_paths(self, actor1, actor2, max_depth, websocket):
         """Find all connection paths between two actors"""
         await websocket.send_text(json.dumps({
             "type": "progress",
@@ -221,45 +221,49 @@ class ActorConnectionFinder:
         actor2_movie_ids = {movie["id"] for movie in actor2_movies}
         common_movies = actor1_movie_ids.intersection(actor2_movie_ids)
         
-        paths = []
+        all_paths = []
         
-        # Add direct connections through shared movies
-        for movie_id in list(common_movies)[:5]:  # Limit to 5 direct connections
-            paths.append([actor1["id"], movie_id, actor2["id"]])
+        # Add direct connections through shared movies (degree 1)
+        for movie_id in list(common_movies)[:10]:  # Increased limit
+            all_paths.append([actor1["id"], movie_id, actor2["id"]])
         
-        if paths:
+        if all_paths:
             await websocket.send_text(json.dumps({
                 "type": "progress",
-                "message": f"Found {len(paths)} direct connection(s)!",
+                "message": f"Found {len(all_paths)} direct connection(s)!",
                 "stage": "found",
-                "progress": 70
+                "progress": 50
             }))
-        else:
-            # If no direct connections, do BFS for 2-degree connections
+        
+        # Continue searching for deeper connections if max_depth > 1
+        if max_depth > 1:
             await websocket.send_text(json.dumps({
                 "type": "progress",
                 "message": "Searching for indirect connections...",
                 "stage": "bfs",
                 "progress": 50
             }))
-            paths = await self._bfs_search(actor1, actor2, websocket)
+            
+            deeper_paths = await self._comprehensive_bfs_search(actor1, actor2, max_depth, websocket)
+            all_paths.extend(deeper_paths)
         
-        return paths
+        # Sort paths by degree (length)
+        all_paths.sort(key=len)
+        
+        return all_paths
     
-    async def _bfs_search(self, actor1, actor2, websocket):
-        """BFS search for 2-degree connections"""
+    async def _comprehensive_bfs_search(self, actor1, actor2, max_depth, websocket):
+        """Comprehensive bidirectional BFS search for multiple connection paths"""
         queue1 = deque([(actor1["id"], "actor", [actor1["id"]])])
         queue2 = deque([(actor2["id"], "actor", [actor2["id"]])])
         
         visited1 = {actor1["id"]: [actor1["id"]]}
         visited2 = {actor2["id"]: [actor2["id"]]}
         
-        paths = []
-        max_depth = 2  # Limit to 2-degree connections
+        all_paths = []
         current_depth = 0
-        total_processed = 0
         
-        while (queue1 or queue2) and current_depth < max_depth and not paths:
+        while (queue1 or queue2) and current_depth < max_depth:
             current_depth += 1
             
             await websocket.send_text(json.dumps({
@@ -273,23 +277,79 @@ class ActorConnectionFinder:
             
             # Process one level from each side
             if queue1:
-                await self._process_bfs_level(queue1, visited1, visited2, paths, "forward", websocket)
-                total_processed += 1
+                await self._process_comprehensive_bfs_level(queue1, visited1, visited2, all_paths, "forward", websocket)
             
-            if queue2 and not paths:
-                await self._process_bfs_level(queue2, visited2, visited1, paths, "backward", websocket)
-                total_processed += 1
+            if queue2:
+                await self._process_comprehensive_bfs_level(queue2, visited2, visited1, all_paths, "backward", websocket)
+            
+            # Continue searching even after finding paths to get all possible connections
+            if len(all_paths) > 20:  # Limit total paths to prevent overwhelming
+                break
         
-        if paths:
+        if all_paths:
             await websocket.send_text(json.dumps({
                 "type": "progress",
-                "message": f"Found {len(paths)} indirect connection(s)!",
+                "message": f"Found {len(all_paths)} additional connection(s)!",
                 "stage": "found",
                 "progress": 70
             }))
         
-        return paths[:3]  # Return up to 3 paths
+        return all_paths
     
+    async def _process_comprehensive_bfs_level(self, queue, visited_self, visited_other, all_paths, direction, websocket):
+        """Process one BFS level for comprehensive search"""
+        level_size = len(queue)
+        processed_in_level = 0
+        
+        for _ in range(level_size):
+            if not queue:
+                break
+                
+            current_id, current_type, path = queue.popleft()
+            processed_in_level += 1
+            
+            # Send progress update occasionally
+            if processed_in_level % 10 == 0:
+                await websocket.send_text(json.dumps({
+                    "type": "progress",
+                    "message": f"Processing {current_type} {processed_in_level}/{level_size}",
+                    "stage": "bfs",
+                    "progress": 50 + (processed_in_level / level_size) * 5,
+                    "current_type": current_type,
+                    "processed": processed_in_level,
+                    "total_in_level": level_size
+                }))
+            
+            if current_type == "actor":
+                movies = await self.tmdb.get_person_movies(current_id)
+                for movie in movies[:20]:  # Increased limit for more thorough search
+                    movie_id = movie["id"]
+                    
+                    if movie_id not in visited_self:
+                        visited_self[movie_id] = path + [movie_id]
+                        queue.append((movie_id, "movie", path + [movie_id]))
+                        
+                        # Check for connection and add to all_paths (don't return immediately)
+                        if movie_id in visited_other:
+                            connection_path = self._construct_path(visited_self[movie_id], visited_other[movie_id], direction)
+                            if connection_path not in all_paths:
+                                all_paths.append(connection_path)
+            
+            elif current_type == "movie":
+                cast = await self.tmdb.get_movie_cast(current_id)
+                for actor in cast[:25]:  # Increased limit for more thorough search
+                    actor_id = actor["id"]
+                    
+                    if actor_id not in visited_self:
+                        visited_self[actor_id] = path + [actor_id]
+                        queue.append((actor_id, "actor", path + [actor_id]))
+                        
+                        # Check for connection and add to all_paths (don't return immediately)
+                        if actor_id in visited_other:
+                            connection_path = self._construct_path(visited_self[actor_id], visited_other[actor_id], direction)
+                            if connection_path not in all_paths:
+                                all_paths.append(connection_path)
+
     async def _process_bfs_level(self, queue, visited_self, visited_other, paths, direction, websocket):
         """Process one BFS level"""
         level_size = len(queue)
@@ -403,9 +463,10 @@ async def websocket_endpoint(websocket: WebSocket):
             if message["type"] == "find_connections":
                 actor1 = message["actor1"]
                 actor2 = message["actor2"]
-                print(f"Processing connection request: {actor1} -> {actor2}")
+                max_depth = message.get("max_depth", 2)  # Default to depth 2
+                print(f"Processing connection request: {actor1} -> {actor2} (depth: {max_depth})")
                 
-                await connection_finder.find_connections(actor1, actor2, websocket)
+                await connection_finder.find_connections(actor1, actor2, max_depth, websocket)
                 
     except WebSocketDisconnect:
         print("WebSocket disconnected")

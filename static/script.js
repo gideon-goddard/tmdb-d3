@@ -100,6 +100,7 @@ function handleWebSocketMessage(data) {
             allPaths = data.paths;
             updateVisualization();
             populatePathDropdown();
+            populatePathList();
             break;
             
         case 'no_connection':
@@ -117,6 +118,7 @@ function handleWebSocketMessage(data) {
 function findConnections() {
     const actor1 = document.getElementById('actor1').value.trim();
     const actor2 = document.getElementById('actor2').value.trim();
+    const maxDepth = parseInt(document.getElementById('searchDepth').value);
     
     if (!actor1 || !actor2) {
         updateStatus('Please enter both actor names', 'error');
@@ -132,11 +134,13 @@ function findConnections() {
     showProgress();
     document.getElementById('searchBtn').disabled = true;
     document.getElementById('pathSelector').style.display = 'none';
+    document.getElementById('pathListContainer').style.display = 'none';
     
     const message = {
         type: 'find_connections',
         actor1: actor1,
-        actor2: actor2
+        actor2: actor2,
+        max_depth: maxDepth
     };
     
     socket.send(JSON.stringify(message));
@@ -188,7 +192,117 @@ function clearVisualization() {
     
     document.getElementById('pathDropdown').innerHTML = '<option value="">Select a path to highlight</option>';
     document.getElementById('pathSelector').style.display = 'none';
+    document.getElementById('pathListContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
+}
+
+function populatePathList() {
+    const pathListContainer = document.getElementById('pathListContainer');
+    const pathList = document.getElementById('pathList');
+    
+    if (allPaths.length === 0) {
+        pathListContainer.style.display = 'none';
+        return;
+    }
+    
+    // Sort paths by degree (length)
+    const sortedPaths = [...allPaths].sort((a, b) => a.length - b.length);
+    
+    pathList.innerHTML = '';
+    
+    sortedPaths.forEach((path, index) => {
+        const pathItem = document.createElement('div');
+        pathItem.className = 'path-item';
+        pathItem.onclick = () => selectPathFromList(index, pathItem);
+        
+        // Calculate degree
+        const degree = Math.floor((path.length - 1) / 2);
+        
+        // Create degree label
+        const degreeDiv = document.createElement('div');
+        degreeDiv.className = 'path-degree';
+        degreeDiv.textContent = `${degree} Degree${degree !== 1 ? 's' : ''} of Separation`;
+        pathItem.appendChild(degreeDiv);
+        
+        // Create route display
+        const routeDiv = document.createElement('div');
+        routeDiv.className = 'path-route';
+        
+        const routeHTML = path.map((nodeId, i) => {
+            const node = nodes.find(n => n.id === nodeId);
+            if (!node) return `Unknown (${nodeId})`;
+            
+            const isActor = i % 2 === 0;
+            const className = isActor ? 'path-actor' : 'path-movie';
+            return `<span class="${className}">${node.name}</span>`;
+        }).join('<span class="path-arrow">→</span>');
+        
+        routeDiv.innerHTML = routeHTML;
+        pathItem.appendChild(routeDiv);
+        pathList.appendChild(pathItem);
+    });
+    
+    pathListContainer.style.display = 'block';
+}
+
+function selectPathFromList(pathIndex, pathElement) {
+    // Remove previous selection
+    document.querySelectorAll('.path-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+    
+    // Add selection to clicked item
+    pathElement.classList.add('selected');
+    
+    // Update dropdown to match
+    const sortedPaths = [...allPaths].sort((a, b) => a.length - b.length);
+    const originalIndex = allPaths.indexOf(sortedPaths[pathIndex]);
+    
+    document.getElementById('pathDropdown').value = originalIndex;
+    
+    // Highlight the path
+    highlightPathByIndex(originalIndex);
+}
+
+function highlightPathByIndex(pathIndex) {
+    // Clear previous highlights
+    g.selectAll('.node').classed('highlighted', false);
+    g.selectAll('.link').classed('highlighted', false);
+    g.selectAll('.node-label').classed('highlighted', false);
+    
+    if (pathIndex === '' || pathIndex < 0) {
+        currentHighlightedPath = null;
+        return;
+    }
+    
+    const path = allPaths[pathIndex];
+    currentHighlightedPath = path;
+    
+    // Highlight nodes in path
+    path.forEach(nodeId => {
+        g.selectAll('.node')
+            .filter(d => d.id === nodeId)
+            .classed('highlighted', true);
+        
+        g.selectAll('.node-label')
+            .filter(d => d.id === nodeId)
+            .classed('highlighted', true);
+    });
+    
+    // Highlight edges in path
+    for (let i = 0; i < path.length - 1; i++) {
+        const sourceId = path[i];
+        const targetId = path[i + 1];
+        
+        g.selectAll('.link')
+            .filter(d => {
+                const source = d.source.id || d.source;
+                const target = d.target.id || d.target;
+                return (source === sourceId && target === targetId) ||
+                       (source === targetId && target === sourceId);
+            })
+            .classed('highlighted', true);
+    }
 }
 
 function updateVisualization() {
@@ -196,23 +310,23 @@ function updateVisualization() {
     simulation.nodes(nodes);
     simulation.force('link').links(links);
     
-    // Update links
-    const link = g.selectAll('.link')
+    // Update links with proper selection pattern
+    const linkSelection = g.selectAll('.link')
         .data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
     
-    link.enter()
+    linkSelection.enter()
         .append('line')
         .attr('class', 'link');
     
-    link.exit().remove();
+    linkSelection.exit().remove();
     
-    // Update nodes
-    const node = g.selectAll('.node')
+    // Update nodes with proper selection pattern
+    const nodeSelection = g.selectAll('.node')
         .data(nodes, d => d.id);
     
-    const nodeEnter = node.enter()
+    nodeSelection.enter()
         .append('circle')
-        .attr('class', d => `node ${d.type.replace('_', '-')}`)  // Convert underscores to hyphens for CSS
+        .attr('class', d => `node ${d.type.replace('_', '-')}`)
         .attr('r', 8)
         .call(d3.drag()
             .on('start', dragstarted)
@@ -227,40 +341,56 @@ function updateVisualization() {
             }
         });
     
-    node.exit().remove();
+    nodeSelection.exit().remove();
     
-    // Update labels
-    const label = g.selectAll('.node-label')
+    // Update labels with full names (no truncation)
+    const labelSelection = g.selectAll('.node-label')
         .data(nodes, d => d.id);
     
-    label.enter()
+    labelSelection.enter()
         .append('text')
         .attr('class', 'node-label')
-        .text(d => {
-            return d.name.length > 15 ? d.name.substring(0, 15) + '...' : d.name;
+        .text(d => d.name);  // Show full name
+    
+    labelSelection.exit().remove();
+    
+    // Restart simulation with higher alpha for better stability
+    simulation.alpha(0.5).restart();
+    
+    // Clear any existing tick handlers and set a new one
+    simulation.on('tick', null);
+    simulation.on('tick', ticked);
+}
+
+function ticked() {
+    // Update link positions
+    g.selectAll('.link')
+        .attr('x1', d => {
+            const source = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+            return source ? source.x : 0;
+        })
+        .attr('y1', d => {
+            const source = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+            return source ? source.y : 0;
+        })
+        .attr('x2', d => {
+            const target = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+            return target ? target.x : 0;
+        })
+        .attr('y2', d => {
+            const target = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+            return target ? target.y : 0;
         });
     
-    label.exit().remove();
+    // Update node positions
+    g.selectAll('.node')
+        .attr('cx', d => d.x)
+        .attr('cy', d => d.y);
     
-    // Restart simulation with proper alpha
-    simulation.alpha(1).restart();
-    
-    // Update positions on tick - ensure this is set every time
-    simulation.on('tick', () => {
-        g.selectAll('.link')
-            .attr('x1', d => (d.source.x !== undefined ? d.source.x : 0))
-            .attr('y1', d => (d.source.y !== undefined ? d.source.y : 0))
-            .attr('x2', d => (d.target.x !== undefined ? d.target.x : 0))
-            .attr('y2', d => (d.target.y !== undefined ? d.target.y : 0));
-        
-        g.selectAll('.node')
-            .attr('cx', d => d.x)
-            .attr('cy', d => d.y);
-        
-        g.selectAll('.node-label')
-            .attr('x', d => d.x)
-            .attr('y', d => d.y + 25);
-    });
+    // Update label positions
+    g.selectAll('.node-label')
+        .attr('x', d => d.x)
+        .attr('y', d => d.y + 25);
 }
 
 function populatePathDropdown() {

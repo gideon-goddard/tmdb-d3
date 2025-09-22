@@ -26,6 +26,16 @@
                     <input type="text" id="actor2" value="Arnold Schwarzenegger" placeholder="e.g., Tom Hanks">
                 </div>
                 
+                <div class="input-field">
+                    <label for="searchDepth">Max Depth:</label>
+                    <select id="searchDepth">
+                        <option value="1">1 (Direct connections only)</option>
+                        <option value="2" selected>2 (Up to 1 intermediary)</option>
+                        <option value="3">3 (Up to 2 intermediaries)</option>
+                        <option value="4">4 (Up to 3 intermediaries)</option>
+                    </select>
+                </div>
+                
                 <button id="searchBtn" onclick="findConnections()">Find Connections</button>
             </div>
             
@@ -69,6 +79,13 @@
                     <div class="legend-color cast-member"></div>
                     <span>Cast Members</span>
                 </div>
+            </div>
+        </div>
+        
+        <div class="path-list-container" id="pathListContainer" style="display: none;">
+            <h3>🛤️ Connection Paths (ordered by degree)</h3>
+            <div class="path-list" id="pathList">
+                <!-- Paths will be populated here -->
             </div>
         </div>
     </div>
