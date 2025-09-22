@@ -18,12 +18,18 @@
             <div class="input-group">
                 <div class="input-field">
                     <label for="actor1">First Actor:</label>
-                    <input type="text" id="actor1" value="Danny DeVito" placeholder="e.g., Kevin Bacon">
+                    <div class="autocomplete-container">
+                        <input type="text" id="actor1" placeholder="e.g., Kevin Bacon" autocomplete="off">
+                        <div class="autocomplete-dropdown" id="actor1-dropdown"></div>
+                    </div>
                 </div>
                 
                 <div class="input-field">
                     <label for="actor2">Second Actor:</label>
-                    <input type="text" id="actor2" value="Arnold Schwarzenegger" placeholder="e.g., Tom Hanks">
+                    <div class="autocomplete-container">
+                        <input type="text" id="actor2" placeholder="e.g., Tom Hanks" autocomplete="off">
+                        <div class="autocomplete-dropdown" id="actor2-dropdown"></div>
+                    </div>
                 </div>
                 
                 <div class="input-field">

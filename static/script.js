@@ -10,10 +10,18 @@ let allPaths = [];
 let currentHighlightedPath = null;
 let searchInProgress = false;
 
+// Autocomplete variables
+let searchTimeouts = {};
+let selectedActors = {
+    actor1: null,
+    actor2: null
+};
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
     initializeVisualization();
     setupWebSocket();
+    setupAutocomplete();
 });
 
 function initializeVisualization() {
@@ -82,6 +90,183 @@ function setupWebSocket() {
     };
 }
 
+function setupAutocomplete() {
+    const actor1Input = document.getElementById('actor1');
+    const actor2Input = document.getElementById('actor2');
+    
+    setupActorInput('actor1', actor1Input);
+    setupActorInput('actor2', actor2Input);
+    
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', function(event) {
+        if (!event.target.closest('.autocomplete-container')) {
+            closeAllDropdowns();
+        }
+    });
+}
+
+function setupActorInput(inputId, inputElement) {
+    const dropdownId = `${inputId}-dropdown`;
+    const dropdown = document.getElementById(dropdownId);
+    let currentHighlighted = -1;
+    
+    inputElement.addEventListener('input', function(event) {
+        const query = event.target.value.trim();
+        
+        // Clear the search timeout
+        if (searchTimeouts[inputId]) {
+            clearTimeout(searchTimeouts[inputId]);
+        }
+        
+        // Clear selected actor if input changes
+        selectedActors[inputId] = null;
+        
+        if (query.length < 3) {
+            dropdown.classList.remove('show');
+            return;
+        }
+        
+        // Show loading
+        showLoadingDropdown(dropdown);
+        
+        // Debounce the search
+        searchTimeouts[inputId] = setTimeout(() => {
+            searchActors(query, dropdown, inputId);
+        }, 300);
+    });
+    
+    inputElement.addEventListener('keydown', function(event) {
+        const items = dropdown.querySelectorAll('.autocomplete-item:not(.loading-results):not(.no-results)');
+        
+        switch(event.key) {
+            case 'ArrowDown':
+                event.preventDefault();
+                currentHighlighted = Math.min(currentHighlighted + 1, items.length - 1);
+                updateHighlight(items, currentHighlighted);
+                break;
+            case 'ArrowUp':
+                event.preventDefault();
+                currentHighlighted = Math.max(currentHighlighted - 1, -1);
+                updateHighlight(items, currentHighlighted);
+                break;
+            case 'Enter':
+                event.preventDefault();
+                if (currentHighlighted >= 0 && items[currentHighlighted]) {
+                    selectActor(items[currentHighlighted], inputId);
+                } else if (inputId === 'actor1') {
+                    document.getElementById('actor2').focus();
+                } else {
+                    findConnections();
+                }
+                break;
+            case 'Escape':
+                dropdown.classList.remove('show');
+                currentHighlighted = -1;
+                break;
+        }
+    });
+    
+    inputElement.addEventListener('focus', function() {
+        if (dropdown.children.length > 0) {
+            dropdown.classList.add('show');
+        }
+    });
+}
+
+function showLoadingDropdown(dropdown) {
+    dropdown.innerHTML = '<div class="autocomplete-item loading-results">Searching actors...</div>';
+    dropdown.classList.add('show');
+}
+
+async function searchActors(query, dropdown, inputId) {
+    try {
+        const response = await fetch(`/search_actors?query=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        displaySearchResults(data.results, dropdown, inputId);
+    } catch (error) {
+        console.error('Error searching actors:', error);
+        dropdown.innerHTML = '<div class="autocomplete-item no-results">Error searching actors</div>';
+        dropdown.classList.add('show');
+    }
+}
+
+function displaySearchResults(results, dropdown, inputId) {
+    dropdown.innerHTML = '';
+    
+    if (results.length === 0) {
+        dropdown.innerHTML = '<div class="autocomplete-item no-results">No actors found</div>';
+        dropdown.classList.add('show');
+        return;
+    }
+    
+    results.forEach(actor => {
+        const item = document.createElement('div');
+        item.className = 'autocomplete-item';
+        item.onclick = () => selectActor(item, inputId);
+        
+        const avatar = actor.profile_path 
+            ? `<img src="https://image.tmdb.org/t/p/w92${actor.profile_path}" alt="${actor.name}" class="actor-avatar">`
+            : '<div class="actor-avatar"></div>';
+        
+        item.innerHTML = `
+            ${avatar}
+            <div class="actor-info">
+                <div class="actor-name">${actor.name}</div>
+                <div class="actor-popularity">Popularity: ${Math.round(actor.popularity)}</div>
+            </div>
+        `;
+        
+        // Store actor data for selection
+        item.dataset.actorId = actor.id;
+        item.dataset.actorName = actor.name;
+        
+        dropdown.appendChild(item);
+    });
+    
+    dropdown.classList.add('show');
+}
+
+function updateHighlight(items, highlightedIndex) {
+    items.forEach((item, index) => {
+        if (index === highlightedIndex) {
+            item.classList.add('highlighted');
+        } else {
+            item.classList.remove('highlighted');
+        }
+    });
+}
+
+function selectActor(item, inputId) {
+    const actorId = item.dataset.actorId;
+    const actorName = item.dataset.actorName;
+    
+    // Set the input value
+    document.getElementById(inputId).value = actorName;
+    
+    // Store selected actor
+    selectedActors[inputId] = {
+        id: parseInt(actorId),
+        name: actorName
+    };
+    
+    // Hide dropdown
+    document.getElementById(`${inputId}-dropdown`).classList.remove('show');
+    
+    // Focus next input or start search
+    if (inputId === 'actor1') {
+        document.getElementById('actor2').focus();
+    } else if (selectedActors.actor1 && selectedActors.actor2) {
+        // Both actors selected, could auto-start search here if desired
+    }
+}
+
+function closeAllDropdowns() {
+    document.querySelectorAll('.autocomplete-dropdown').forEach(dropdown => {
+        dropdown.classList.remove('show');
+    });
+}
+
 function handleWebSocketMessage(data) {
     switch(data.type) {
         case 'actors_found':
@@ -127,8 +312,9 @@ function handleWebSocketMessage(data) {
 }
 
 function findConnections() {
-    const actor1 = document.getElementById('actor1').value.trim();
-    const actor2 = document.getElementById('actor2').value.trim();
+    // Get actor names - prefer selected actors from autocomplete, fallback to input text
+    const actor1 = selectedActors.actor1 ? selectedActors.actor1.name : document.getElementById('actor1').value.trim();
+    const actor2 = selectedActors.actor2 ? selectedActors.actor2.name : document.getElementById('actor2').value.trim();
     const maxDepth = parseInt(document.getElementById('searchDepth').value);
     
     if (!actor1 || !actor2) {
@@ -220,6 +406,12 @@ function clearVisualization() {
     allPaths = [];
     currentHighlightedPath = null;
     
+    // Clear selected actors
+    selectedActors = {
+        actor1: null,
+        actor2: null
+    };
+    
     g.selectAll('.link').remove();
     g.selectAll('.node').remove();
     g.selectAll('.node-label').remove();
@@ -231,6 +423,9 @@ function clearVisualization() {
     document.getElementById('searchBtn').style.display = 'inline-block';
     document.getElementById('stopBtn').style.display = 'none';
     searchInProgress = false;
+    
+    // Close autocomplete dropdowns
+    closeAllDropdowns();
 }
 
 function populatePathList() {

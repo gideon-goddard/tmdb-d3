@@ -493,6 +493,42 @@ async def read_root():
         html_content = f.read()
     return HTMLResponse(content=html_content)
 
+@app.get("/search_actors")
+async def search_actors(query: str):
+    """Search for actors by name for autocomplete"""
+    if len(query) < 3:
+        return {"results": []}
+    
+    try:
+        tmdb = TMDBClient()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{tmdb.base_url}/search/person",
+                params={"api_key": tmdb.api_key, "query": query}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Filter to only include people with known_for_department as Acting
+            actors = []
+            for person in data.get("results", [])[:10]:  # Limit to 10 results
+                if person.get("known_for_department") == "Acting" and person.get("popularity", 0) > 1:
+                    actors.append({
+                        "id": person["id"],
+                        "name": person["name"],
+                        "profile_path": person.get("profile_path"),
+                        "popularity": person.get("popularity", 0)
+                    })
+            
+            # Sort by popularity (descending)
+            actors.sort(key=lambda x: x["popularity"], reverse=True)
+            
+            return {"results": actors}
+            
+    except Exception as e:
+        print(f"Error searching for actors with query '{query}': {e}")
+        return {"results": []}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time communication"""
