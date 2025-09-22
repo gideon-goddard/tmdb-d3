@@ -378,36 +378,14 @@ class ActorConnectionFinder:
         """Filter paths to ensure no movie appears in more than one path to prevent star formations"""
         if not all_paths:
             return all_paths
-        
-        # First, validate all paths to ensure they make sense
+        # Only keep paths with all unique node IDs
         valid_paths = []
         for path in all_paths:
-            if self._validate_path(path):
+            if self._validate_path(path) and len(set(path)) == len(path):
                 valid_paths.append(path)
             else:
-                print(f"Invalid path filtered out: {path}")
-        
-        used_movies = set()
-        filtered_paths = []
-        
-        # Sort paths by length (shorter paths first) and then by a preference score
-        sorted_paths = sorted(valid_paths, key=lambda path: (len(path), self._calculate_path_preference_score(path)))
-        
-        for path in sorted_paths:
-            # Extract movie IDs from this path (odd indices are movies)
-            path_movies = set(path[i] for i in range(1, len(path), 2))
-            
-            # Check if any movie in this path is already used
-            if not path_movies.intersection(used_movies):
-                # No conflicts, add this path
-                filtered_paths.append(path)
-                used_movies.update(path_movies)
-                
-                # Limit total paths to prevent overwhelming visualization
-                if len(filtered_paths) >= 10:  # Increased to allow more diverse connections
-                    break
-        
-        return filtered_paths
+                print(f"Invalid or non-unique path filtered out: {path}")
+        return valid_paths
     
     def _validate_path(self, path):
         """Validate that a path alternates between actors and movies correctly"""
