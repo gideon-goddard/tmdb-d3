@@ -85,30 +85,30 @@ function handleWebSocketMessage(data) {
         case 'actors_found':
             updateStatus(`Found actors: ${data.actor1.name} and ${data.actor2.name}`);
             clearVisualization();
-            // Add the initial search actors to the graph
-            addNode({...data.actor1, type: 'search_actor'});
-            addNode({...data.actor2, type: 'search_actor'});
             break;
             
-        case 'node_added':
-            addNode(data.node);
+        case 'progress':
+            updateProgress(data);
             break;
             
-        case 'edge_added':
-            addEdge(data.edge);
-            break;
-            
-        case 'connections_found':
+        case 'complete_graph':
+            hideProgress();
             updateStatus(`Found ${data.paths.length} connection path(s)!`, 'success');
+            // Load the complete graph at once
+            nodes = data.nodes;
+            links = data.edges;
             allPaths = data.paths;
+            updateVisualization();
             populatePathDropdown();
             break;
             
         case 'no_connection':
+            hideProgress();
             updateStatus(data.message, 'error');
             break;
             
         case 'error':
+            hideProgress();
             updateStatus(`Error: ${data.error}`, 'error');
             break;
     }
@@ -128,7 +128,8 @@ function findConnections() {
         return;
     }
     
-    updateStatus('Searching for connections...', 'loading');
+    updateStatus('Starting search...', 'loading');
+    showProgress();
     document.getElementById('searchBtn').disabled = true;
     document.getElementById('pathSelector').style.display = 'none';
     
@@ -139,6 +140,40 @@ function findConnections() {
     };
     
     socket.send(JSON.stringify(message));
+}
+
+function showProgress() {
+    document.getElementById('progressContainer').style.display = 'block';
+    updateProgressBar(0, 'Initializing...', '');
+}
+
+function hideProgress() {
+    document.getElementById('progressContainer').style.display = 'none';
+    document.getElementById('searchBtn').disabled = false;
+}
+
+function updateProgress(data) {
+    const message = data.message || 'Processing...';
+    const progress = data.progress || 0;
+    
+    // Build details string
+    let details = [];
+    if (data.stage) details.push(`Stage: ${data.stage}`);
+    if (data.depth) details.push(`Depth: ${data.depth}`);
+    if (data.queue_size) details.push(`Queue: ${data.queue_size}`);
+    if (data.current_type) details.push(`Type: ${data.current_type}`);
+    if (data.processed && data.total_in_level) {
+        details.push(`Progress: ${data.processed}/${data.total_in_level}`);
+    }
+    
+    updateProgressBar(progress, message, details.join(' • '));
+}
+
+function updateProgressBar(percent, message, details) {
+    document.getElementById('progressFill').style.width = `${percent}%`;
+    document.getElementById('progressMessage').textContent = message;
+    document.getElementById('progressPercent').textContent = `${Math.round(percent)}%`;
+    document.getElementById('progressDetails').textContent = details;
 }
 
 function clearVisualization() {
@@ -156,26 +191,6 @@ function clearVisualization() {
     document.getElementById('searchBtn').disabled = false;
 }
 
-function addNode(nodeData) {
-    // Check if node already exists
-    if (nodes.find(n => n.id === nodeData.id)) {
-        return;
-    }
-    
-    nodes.push(nodeData);
-    updateVisualization();
-}
-
-function addEdge(edgeData) {
-    // Check if edge already exists
-    if (links.find(l => l.source.id === edgeData.source && l.target.id === edgeData.target)) {
-        return;
-    }
-    
-    links.push(edgeData);
-    updateVisualization();
-}
-
 function updateVisualization() {
     // Update simulation
     simulation.nodes(nodes);
@@ -185,7 +200,7 @@ function updateVisualization() {
     const link = g.selectAll('.link')
         .data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
     
-    const linkEnter = link.enter()
+    link.enter()
         .append('line')
         .attr('class', 'link');
     
@@ -197,14 +212,13 @@ function updateVisualization() {
     
     const nodeEnter = node.enter()
         .append('circle')
-        .attr('class', d => `node ${d.type}`)
+        .attr('class', d => `node ${d.type.replace('_', '-')}`)  // Convert underscores to hyphens for CSS
         .attr('r', 8)
         .call(d3.drag()
             .on('start', dragstarted)
             .on('drag', dragged)
             .on('end', dragended))
         .on('mouseover', function(event, d) {
-            // Show tooltip
             d3.select(this).transition().duration(200).attr('r', 12);
         })
         .on('mouseout', function(event, d) {
@@ -219,26 +233,25 @@ function updateVisualization() {
     const label = g.selectAll('.node-label')
         .data(nodes, d => d.id);
     
-    const labelEnter = label.enter()
+    label.enter()
         .append('text')
         .attr('class', 'node-label')
         .text(d => {
-            // Truncate long names
             return d.name.length > 15 ? d.name.substring(0, 15) + '...' : d.name;
         });
     
     label.exit().remove();
     
-    // Restart simulation
-    simulation.alpha(0.3).restart();
+    // Restart simulation with proper alpha
+    simulation.alpha(1).restart();
     
-    // Update positions on tick
+    // Update positions on tick - ensure this is set every time
     simulation.on('tick', () => {
         g.selectAll('.link')
-            .attr('x1', d => d.source.x)
-            .attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x)
-            .attr('y2', d => d.target.y);
+            .attr('x1', d => (d.source.x !== undefined ? d.source.x : 0))
+            .attr('y1', d => (d.source.y !== undefined ? d.source.y : 0))
+            .attr('x2', d => (d.target.x !== undefined ? d.target.x : 0))
+            .attr('y2', d => (d.target.y !== undefined ? d.target.y : 0));
         
         g.selectAll('.node')
             .attr('cx', d => d.x)

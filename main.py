@@ -91,6 +91,13 @@ class ActorConnectionFinder:
             print(f"Starting search for connections between '{actor1_name}' and '{actor2_name}'")
             
             # Search for actors
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": "Searching for actors...",
+                "stage": "search",
+                "progress": 10
+            }))
+            
             actor1 = await self.tmdb.search_person(actor1_name)
             actor2 = await self.tmdb.search_person(actor2_name)
             
@@ -110,43 +117,74 @@ class ActorConnectionFinder:
                 "actor2": {"id": actor2["id"], "name": actor2["name"]}
             }))
             
-            # Initialize BFS from both ends
-            queue1 = deque([(actor1["id"], "actor", [actor1["id"]])])
-            queue2 = deque([(actor2["id"], "actor", [actor2["id"]])])
-            
-            visited1 = {actor1["id"]: [actor1["id"]]}
-            visited2 = {actor2["id"]: [actor2["id"]]}
-            
-            nodes = {
-                actor1["id"]: {"id": actor1["id"], "name": actor1["name"], "type": "search_actor"},
-                actor2["id"]: {"id": actor2["id"], "name": actor2["name"], "type": "search_actor"}
-            }
-            edges = []
-            paths = []
-            
-            max_depth = 3  # Limit search depth
-            current_depth = 0
-            
-            while (queue1 or queue2) and current_depth < max_depth:
-                current_depth += 1
-                
-                # Process queue1 (from actor1)
-                if queue1:
-                    await self._process_queue(queue1, visited1, visited2, nodes, edges, paths, websocket, "forward")
-                
-                # Process queue2 (from actor2)
-                if queue2:
-                    await self._process_queue(queue2, visited2, visited1, nodes, edges, paths, websocket, "backward")
-                
-                if paths:  # Connection found
-                    break
+            # Find all connection paths first
+            paths = await self._find_all_paths(actor1, actor2, websocket)
             
             if paths:
                 await websocket.send_text(json.dumps({
-                    "type": "connections_found",
-                    "paths": paths,
-                    "nodes": list(nodes.values()),
-                    "edges": edges
+                    "type": "progress",
+                    "message": "Building final graph...",
+                    "stage": "building",
+                    "progress": 80
+                }))
+                
+                # Build the complete graph for all found paths
+                all_nodes = {}
+                all_edges = []
+                
+                # Add search actors
+                all_nodes[actor1["id"]] = {"id": actor1["id"], "name": actor1["name"], "type": "search_actor"}
+                all_nodes[actor2["id"]] = {"id": actor2["id"], "name": actor2["name"], "type": "search_actor"}
+                
+                # Build graph from paths
+                total_nodes = sum(len(path) for path in paths)
+                processed_nodes = 0
+                
+                for path in paths:
+                    for i, node_id in enumerate(path):
+                        if node_id not in all_nodes:
+                            # Determine if this is a movie or actor
+                            if i % 2 == 0:  # Even indices are actors, odd are movies
+                                # Get actor details
+                                actor_details = await self._get_actor_details(node_id)
+                                if actor_details:
+                                    node_type = "search_actor" if node_id in [actor1["id"], actor2["id"]] else "cast_member"
+                                    all_nodes[node_id] = {"id": node_id, "name": actor_details["name"], "type": node_type}
+                            else:
+                                # Get movie details
+                                movie_details = await self._get_movie_details(node_id)
+                                if movie_details:
+                                    all_nodes[node_id] = {"id": node_id, "name": movie_details["title"], "type": "movie"}
+                        
+                        # Add edges
+                        if i < len(path) - 1:
+                            edge = {"source": path[i], "target": path[i + 1]}
+                            if edge not in all_edges:
+                                all_edges.append(edge)
+                        
+                        processed_nodes += 1
+                        if processed_nodes % 5 == 0:  # Update progress every 5 nodes
+                            progress = 80 + (processed_nodes / total_nodes) * 15
+                            await websocket.send_text(json.dumps({
+                                "type": "progress",
+                                "message": f"Processing node {processed_nodes}/{total_nodes}",
+                                "stage": "building",
+                                "progress": min(95, progress)
+                            }))
+                
+                await websocket.send_text(json.dumps({
+                    "type": "progress",
+                    "message": "Complete!",
+                    "stage": "complete",
+                    "progress": 100
+                }))
+                
+                # Send the complete graph at once
+                await websocket.send_text(json.dumps({
+                    "type": "complete_graph",
+                    "nodes": list(all_nodes.values()),
+                    "edges": all_edges,
+                    "paths": paths
                 }))
             else:
                 await websocket.send_text(json.dumps({
@@ -155,44 +193,130 @@ class ActorConnectionFinder:
                 }))
                 
         except Exception as e:
+            print(f"Error in find_connections: {e}")
             await websocket.send_text(json.dumps({"error": str(e)}))
     
-    async def _process_queue(self, queue, visited_self, visited_other, nodes, edges, paths, websocket, direction):
-        """Process one level of BFS queue"""
+    async def _find_all_paths(self, actor1, actor2, websocket):
+        """Find all connection paths between two actors"""
+        await websocket.send_text(json.dumps({
+            "type": "progress",
+            "message": "Getting actor filmographies...",
+            "stage": "movies",
+            "progress": 20
+        }))
+        
+        # Check for direct movie connections first
+        actor1_movies = await self.tmdb.get_person_movies(actor1["id"])
+        actor2_movies = await self.tmdb.get_person_movies(actor2["id"])
+        
+        await websocket.send_text(json.dumps({
+            "type": "progress",
+            "message": "Checking for direct connections...",
+            "stage": "direct",
+            "progress": 40
+        }))
+        
+        # Look for common movies (direct connection)
+        actor1_movie_ids = {movie["id"] for movie in actor1_movies}
+        actor2_movie_ids = {movie["id"] for movie in actor2_movies}
+        common_movies = actor1_movie_ids.intersection(actor2_movie_ids)
+        
+        paths = []
+        
+        # Add direct connections through shared movies
+        for movie_id in list(common_movies)[:5]:  # Limit to 5 direct connections
+            paths.append([actor1["id"], movie_id, actor2["id"]])
+        
+        if paths:
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": f"Found {len(paths)} direct connection(s)!",
+                "stage": "found",
+                "progress": 70
+            }))
+        else:
+            # If no direct connections, do BFS for 2-degree connections
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": "Searching for indirect connections...",
+                "stage": "bfs",
+                "progress": 50
+            }))
+            paths = await self._bfs_search(actor1, actor2, websocket)
+        
+        return paths
+    
+    async def _bfs_search(self, actor1, actor2, websocket):
+        """BFS search for 2-degree connections"""
+        queue1 = deque([(actor1["id"], "actor", [actor1["id"]])])
+        queue2 = deque([(actor2["id"], "actor", [actor2["id"]])])
+        
+        visited1 = {actor1["id"]: [actor1["id"]]}
+        visited2 = {actor2["id"]: [actor2["id"]]}
+        
+        paths = []
+        max_depth = 2  # Limit to 2-degree connections
+        current_depth = 0
+        total_processed = 0
+        
+        while (queue1 or queue2) and current_depth < max_depth and not paths:
+            current_depth += 1
+            
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": f"Searching depth {current_depth}/{max_depth}...",
+                "stage": "bfs",
+                "progress": 50 + (current_depth / max_depth) * 20,
+                "depth": current_depth,
+                "queue_size": len(queue1) + len(queue2)
+            }))
+            
+            # Process one level from each side
+            if queue1:
+                await self._process_bfs_level(queue1, visited1, visited2, paths, "forward", websocket)
+                total_processed += 1
+            
+            if queue2 and not paths:
+                await self._process_bfs_level(queue2, visited2, visited1, paths, "backward", websocket)
+                total_processed += 1
+        
+        if paths:
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": f"Found {len(paths)} indirect connection(s)!",
+                "stage": "found",
+                "progress": 70
+            }))
+        
+        return paths[:3]  # Return up to 3 paths
+    
+    async def _process_bfs_level(self, queue, visited_self, visited_other, paths, direction, websocket):
+        """Process one BFS level"""
         level_size = len(queue)
+        processed_in_level = 0
         
         for _ in range(level_size):
-            if not queue:
+            if not queue or paths:  # Stop if we found paths
                 break
                 
             current_id, current_type, path = queue.popleft()
+            processed_in_level += 1
+            
+            # Send progress update
+            await websocket.send_text(json.dumps({
+                "type": "progress",
+                "message": f"Processing {current_type} {processed_in_level}/{level_size}",
+                "stage": "bfs",
+                "progress": 50 + (processed_in_level / level_size) * 5,
+                "current_type": current_type,
+                "processed": processed_in_level,
+                "total_in_level": level_size
+            }))
             
             if current_type == "actor":
-                # Get movies for this actor
                 movies = await self.tmdb.get_person_movies(current_id)
-                for movie in movies[:10]:  # Limit to 10 movies
+                for movie in movies[:15]:  # Limit movies per actor
                     movie_id = movie["id"]
-                    
-                    if movie_id not in nodes:
-                        nodes[movie_id] = {
-                            "id": movie_id,
-                            "name": movie["title"],
-                            "type": "movie"
-                        }
-                        
-                        await websocket.send_text(json.dumps({
-                            "type": "node_added",
-                            "node": nodes[movie_id]
-                        }))
-                    
-                    # Add edge
-                    edge = {"source": current_id, "target": movie_id}
-                    if edge not in edges:
-                        edges.append(edge)
-                        await websocket.send_text(json.dumps({
-                            "type": "edge_added",
-                            "edge": edge
-                        }))
                     
                     if movie_id not in visited_self:
                         visited_self[movie_id] = path + [movie_id]
@@ -205,31 +329,9 @@ class ActorConnectionFinder:
                             return
             
             elif current_type == "movie":
-                # Get cast for this movie
                 cast = await self.tmdb.get_movie_cast(current_id)
-                for actor in cast:
+                for actor in cast[:20]:  # Limit cast per movie
                     actor_id = actor["id"]
-                    
-                    if actor_id not in nodes:
-                        nodes[actor_id] = {
-                            "id": actor_id,
-                            "name": actor["name"],
-                            "type": "cast_member"
-                        }
-                        
-                        await websocket.send_text(json.dumps({
-                            "type": "node_added",
-                            "node": nodes[actor_id]
-                        }))
-                    
-                    # Add edge
-                    edge = {"source": current_id, "target": actor_id}
-                    if edge not in edges:
-                        edges.append(edge)
-                        await websocket.send_text(json.dumps({
-                            "type": "edge_added",
-                            "edge": edge
-                        }))
                     
                     if actor_id not in visited_self:
                         visited_self[actor_id] = path + [actor_id]
@@ -240,6 +342,34 @@ class ActorConnectionFinder:
                             connection_path = self._construct_path(visited_self[actor_id], visited_other[actor_id], direction)
                             paths.append(connection_path)
                             return
+    
+    async def _get_actor_details(self, actor_id):
+        """Get actor details by ID"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.tmdb.base_url}/person/{actor_id}",
+                    params={"api_key": self.tmdb.api_key}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            print(f"Error getting actor details for {actor_id}: {e}")
+            return None
+    
+    async def _get_movie_details(self, movie_id):
+        """Get movie details by ID"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.tmdb.base_url}/movie/{movie_id}",
+                    params={"api_key": self.tmdb.api_key}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            print(f"Error getting movie details for {movie_id}: {e}")
+            return None
     
     def _construct_path(self, path1, path2, direction):
         """Construct the full path when connection is found"""
