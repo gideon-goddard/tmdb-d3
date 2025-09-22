@@ -37,6 +37,7 @@
                 </div>
                 
                 <button id="searchBtn" onclick="findConnections()">Find Connections</button>
+                <button id="stopBtn" onclick="stopSearch()" style="display: none;">Stop Search</button>
             </div>
             
             <div class="path-selector" id="pathSelector" style="display: none;">
@@ -64,6 +65,15 @@
         
         <div class="visualization-container">
             <svg id="graph"></svg>
+            
+            <div class="visualization-controls">
+                <button id="fitToScreenBtn" class="viz-control-btn" onclick="fitToScreen()" title="Fit to Screen">
+                    📐 Fit to Screen
+                </button>
+                <button id="saveImageBtn" class="viz-control-btn" onclick="saveAsImage()" title="Save as High Quality Image">
+                    💾 Save Image
+                </button>
+            </div>
             
             <div class="legend">
                 <h3>Legend</h3>

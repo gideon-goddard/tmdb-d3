@@ -3,10 +3,12 @@ let socket = null;
 let simulation = null;
 let svg = null;
 let g = null;
+let zoom = null;
 let nodes = [];
 let links = [];
 let allPaths = [];
 let currentHighlightedPath = null;
+let searchInProgress = false;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
@@ -26,7 +28,7 @@ function initializeVisualization() {
     g = svg.append('g');
     
     // Set up zoom behavior
-    const zoom = d3.zoom()
+    zoom = d3.zoom()
         .scaleExtent([0.1, 4])
         .on('zoom', function(event) {
             g.attr('transform', event.transform);
@@ -92,6 +94,7 @@ function handleWebSocketMessage(data) {
             break;
             
         case 'complete_graph':
+            searchInProgress = false;
             hideProgress();
             updateStatus(`Found ${data.paths.length} connection path(s)!`, 'success');
             // Load the complete graph at once
@@ -104,11 +107,19 @@ function handleWebSocketMessage(data) {
             break;
             
         case 'no_connection':
+            searchInProgress = false;
             hideProgress();
             updateStatus(data.message, 'error');
             break;
             
+        case 'search_stopped':
+            searchInProgress = false;
+            hideProgress();
+            updateStatus('Search stopped by user', 'error');
+            break;
+            
         case 'error':
+            searchInProgress = false;
             hideProgress();
             updateStatus(`Error: ${data.error}`, 'error');
             break;
@@ -130,9 +141,12 @@ function findConnections() {
         return;
     }
     
+    searchInProgress = true;
     updateStatus('Starting search...', 'loading');
     showProgress();
     document.getElementById('searchBtn').disabled = true;
+    document.getElementById('searchBtn').style.display = 'none';
+    document.getElementById('stopBtn').style.display = 'inline-block';
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     
@@ -146,6 +160,23 @@ function findConnections() {
     socket.send(JSON.stringify(message));
 }
 
+function stopSearch() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+    
+    searchInProgress = false;
+    
+    const message = {
+        type: 'stop_search'
+    };
+    
+    socket.send(JSON.stringify(message));
+    
+    hideProgress();
+    updateStatus('Stopping search...', 'loading');
+}
+
 function showProgress() {
     document.getElementById('progressContainer').style.display = 'block';
     updateProgressBar(0, 'Initializing...', '');
@@ -154,6 +185,9 @@ function showProgress() {
 function hideProgress() {
     document.getElementById('progressContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('searchBtn').style.display = 'inline-block';
+    document.getElementById('stopBtn').style.display = 'none';
+    searchInProgress = false;
 }
 
 function updateProgress(data) {
@@ -194,6 +228,9 @@ function clearVisualization() {
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('searchBtn').style.display = 'inline-block';
+    document.getElementById('stopBtn').style.display = 'none';
+    searchInProgress = false;
 }
 
 function populatePathList() {
@@ -496,3 +533,161 @@ document.getElementById('actor2').addEventListener('keypress', function(event) {
         findConnections();
     }
 });
+
+// Fit to screen function
+function fitToScreen() {
+    if (nodes.length === 0) return;
+    
+    const containerRect = d3.select('.visualization-container').node().getBoundingClientRect();
+    const padding = 50;
+    
+    // Calculate bounds of all nodes
+    const xExtent = d3.extent(nodes, d => d.x);
+    const yExtent = d3.extent(nodes, d => d.y);
+    
+    const width = xExtent[1] - xExtent[0];
+    const height = yExtent[1] - yExtent[0];
+    
+    if (width === 0 || height === 0) return;
+    
+    // Calculate scale to fit all nodes with padding
+    const scale = Math.min(
+        (containerRect.width - padding * 2) / width,
+        (containerRect.height - padding * 2) / height
+    );
+    
+    // Calculate center point
+    const centerX = (xExtent[0] + xExtent[1]) / 2;
+    const centerY = (yExtent[0] + yExtent[1]) / 2;
+    
+    // Calculate transform to center the graph
+    const translateX = containerRect.width / 2 - scale * centerX;
+    const translateY = containerRect.height / 2 - scale * centerY;
+    
+    // Apply the transform with animation
+    svg.transition()
+        .duration(750)
+        .call(
+            zoom.transform,
+            d3.zoomIdentity.translate(translateX, translateY).scale(scale)
+        );
+}
+
+// Save as image function
+function saveAsImage() {
+    if (nodes.length === 0) {
+        alert('No visualization to save. Please find connections first.');
+        return;
+    }
+    
+    // Disable the button temporarily
+    const saveBtn = document.getElementById('saveImageBtn');
+    const originalText = saveBtn.textContent;
+    saveBtn.disabled = true;
+    saveBtn.textContent = '💾 Saving...';
+    
+    try {
+        // Create a new SVG element for export
+        const svgElement = document.getElementById('graph');
+        const svgRect = svgElement.getBoundingClientRect();
+        
+        // Clone the SVG
+        const clonedSvg = svgElement.cloneNode(true);
+        
+        // Set explicit dimensions and background
+        clonedSvg.setAttribute('width', svgRect.width);
+        clonedSvg.setAttribute('height', svgRect.height);
+        clonedSvg.style.backgroundColor = 'white';
+        
+        // Add CSS styles inline for better compatibility
+        const styleSheet = document.createElement('style');
+        styleSheet.textContent = `
+            .node.search-actor { fill: #e74c3c; stroke: #fff; stroke-width: 2px; }
+            .node.movie { fill: #3498db; stroke: #fff; stroke-width: 2px; }
+            .node.cast-member { fill: #2ecc71; stroke: #fff; stroke-width: 2px; }
+            .node.highlighted { stroke: #f39c12; stroke-width: 4px; fill: #f39c12; }
+            .link { stroke: #95a5a6; stroke-width: 2px; stroke-opacity: 0.6; }
+            .link.highlighted { stroke: #f39c12; stroke-width: 4px; stroke-opacity: 1; }
+            .node-label { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; text-anchor: middle; }
+            .node-label.highlighted { font-weight: bold; font-size: 12px; fill: #f39c12; }
+        `;
+        clonedSvg.insertBefore(styleSheet, clonedSvg.firstChild);
+        
+        // Create a temporary container
+        const tempContainer = document.createElement('div');
+        tempContainer.style.position = 'absolute';
+        tempContainer.style.left = '-9999px';
+        tempContainer.appendChild(clonedSvg);
+        document.body.appendChild(tempContainer);
+        
+        // Convert SVG to canvas
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set high resolution for better quality
+        const scale = 2;
+        canvas.width = svgRect.width * scale;
+        canvas.height = svgRect.height * scale;
+        ctx.scale(scale, scale);
+        
+        // Set white background
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, svgRect.width, svgRect.height);
+        
+        // Convert SVG to data URL
+        const svgData = new XMLSerializer().serializeToString(clonedSvg);
+        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const svgUrl = URL.createObjectURL(svgBlob);
+        
+        // Load SVG into image
+        const img = new Image();
+        img.onload = function() {
+            // Draw image on canvas
+            ctx.drawImage(img, 0, 0);
+            
+            // Convert canvas to blob and download
+            canvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = `actor-connections-${Date.now()}.png`;
+                link.href = url;
+                link.click();
+                
+                // Cleanup
+                URL.revokeObjectURL(url);
+                URL.revokeObjectURL(svgUrl);
+                document.body.removeChild(tempContainer);
+                
+                // Re-enable button
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalText;
+            }, 'image/png', 1.0);
+        };
+        
+        img.onerror = function() {
+            // Fallback: download SVG directly
+            const link = document.createElement('a');
+            link.download = `actor-connections-${Date.now()}.svg`;
+            link.href = svgUrl;
+            link.click();
+            
+            // Cleanup
+            URL.revokeObjectURL(svgUrl);
+            document.body.removeChild(tempContainer);
+            
+            // Re-enable button
+            saveBtn.disabled = false;
+            saveBtn.textContent = originalText;
+        };
+        
+        img.src = svgUrl;
+        
+    } catch (error) {
+        console.error('Error saving image:', error);
+        alert('Error saving image. Please try again.');
+        
+        // Re-enable button
+        saveBtn.disabled = false;
+        saveBtn.textContent = originalText;
+    }
+}

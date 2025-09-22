@@ -84,10 +84,12 @@ class TMDBClient:
 class ActorConnectionFinder:
     def __init__(self):
         self.tmdb = TMDBClient()
+        self.search_cancelled = False
     
     async def find_connections(self, actor1_name: str, actor2_name: str, max_depth: int, websocket: WebSocket):
         """Find connections between two actors using bidirectional BFS"""
         try:
+            self.search_cancelled = False
             print(f"Starting search for connections between '{actor1_name}' and '{actor2_name}' (max depth: {max_depth})")
             
             # Search for actors
@@ -97,6 +99,10 @@ class ActorConnectionFinder:
                 "stage": "search",
                 "progress": 10
             }))
+            
+            if self.search_cancelled:
+                await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                return
             
             actor1 = await self.tmdb.search_person(actor1_name)
             actor2 = await self.tmdb.search_person(actor2_name)
@@ -120,6 +126,10 @@ class ActorConnectionFinder:
             # Find all connection paths first
             paths = await self._find_all_paths(actor1, actor2, max_depth, websocket)
             
+            if self.search_cancelled:
+                await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                return
+            
             if paths:
                 await websocket.send_text(json.dumps({
                     "type": "progress",
@@ -142,6 +152,10 @@ class ActorConnectionFinder:
                 
                 for path in paths:
                     for i, node_id in enumerate(path):
+                        if self.search_cancelled:
+                            await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                            return
+                            
                         if node_id not in all_nodes:
                             # Determine if this is a movie or actor
                             if i % 2 == 0:  # Even indices are actors, odd are movies
@@ -205,6 +219,9 @@ class ActorConnectionFinder:
             "progress": 20
         }))
         
+        if self.search_cancelled:
+            return []
+        
         # Check for direct movie connections first
         actor1_movies = await self.tmdb.get_person_movies(actor1["id"])
         actor2_movies = await self.tmdb.get_person_movies(actor2["id"])
@@ -236,7 +253,7 @@ class ActorConnectionFinder:
             }))
         
         # Continue searching for deeper connections if max_depth > 1
-        if max_depth > 1:
+        if max_depth > 1 and not self.search_cancelled:
             await websocket.send_text(json.dumps({
                 "type": "progress",
                 "message": "Searching for indirect connections...",
@@ -245,7 +262,8 @@ class ActorConnectionFinder:
             }))
             
             deeper_paths = await self._comprehensive_bfs_search(actor1, actor2, max_depth, websocket)
-            all_paths.extend(deeper_paths)
+            if not self.search_cancelled:
+                all_paths.extend(deeper_paths)
         
         # Sort paths by degree (length)
         all_paths.sort(key=len)
@@ -263,7 +281,7 @@ class ActorConnectionFinder:
         all_paths = []
         current_depth = 0
         
-        while (queue1 or queue2) and current_depth < max_depth:
+        while (queue1 or queue2) and current_depth < max_depth and not self.search_cancelled:
             current_depth += 1
             
             await websocket.send_text(json.dumps({
@@ -302,7 +320,7 @@ class ActorConnectionFinder:
         processed_in_level = 0
         
         for _ in range(level_size):
-            if not queue:
+            if not queue or self.search_cancelled:
                 break
                 
             current_id, current_type, path = queue.popleft()
@@ -356,7 +374,7 @@ class ActorConnectionFinder:
         processed_in_level = 0
         
         for _ in range(level_size):
-            if not queue or paths:  # Stop if we found paths
+            if not queue or paths or self.search_cancelled:  # Stop if we found paths or search cancelled
                 break
                 
             current_id, current_type, path = queue.popleft()
@@ -437,6 +455,10 @@ class ActorConnectionFinder:
             return path1 + path2[::-1][1:]
         else:
             return path2 + path1[::-1][1:]
+    
+    def cancel_search(self):
+        """Cancel the current search"""
+        self.search_cancelled = True
 
 # Global connection finder instance
 connection_finder = ActorConnectionFinder()
@@ -468,11 +490,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 await connection_finder.find_connections(actor1, actor2, max_depth, websocket)
                 
+            elif message["type"] == "stop_search":
+                print("Received stop search request")
+                connection_finder.search_cancelled = True
+                await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                
     except WebSocketDisconnect:
         print("WebSocket disconnected")
     except Exception as e:
         print(f"WebSocket error: {e}")
         await websocket.send_text(json.dumps({"error": f"Server error: {str(e)}"}))
+        connection_finder.search_cancelled = True
 
 if __name__ == "__main__":
     import uvicorn
