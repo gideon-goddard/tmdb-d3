@@ -64,9 +64,9 @@ class TMDBClient:
                 )
                 response.raise_for_status()
                 data = response.json()
-                # Get both cast and crew movies for comprehensive results
-                movies = data.get("cast", []) + data.get("crew", [])
-                print(f"Found {len(movies)} movies (cast + crew) for person {person_id}")
+                # Only include cast movies for cleaner connections
+                movies = data.get("cast", [])
+                print(f"Found {len(movies)} movies for person {person_id}")
                 return movies
         except Exception as e:
             print(f"Error getting movies for person {person_id}: {e}")
@@ -82,9 +82,9 @@ class TMDBClient:
                 )
                 response.raise_for_status()
                 data = response.json()
-                # Get both cast and crew for comprehensive results
-                people = data.get("cast", []) + data.get("crew", [])
-                print(f"Found {len(people)} people (cast + crew) for movie {movie_id}")
+                # Only include cast for cleaner, more understandable connections
+                people = data.get("cast", [])
+                print(f"Found {len(people)} cast members for movie {movie_id}")
                 return people
         except Exception as e:
             print(f"Error getting cast for movie {movie_id}: {e}")
@@ -320,6 +320,10 @@ class ActorConnectionFinder:
         # Filter out duplicate movies to prevent star formations
         filtered_paths = self._filter_duplicate_movies(all_paths)
         
+        print(f"Found {len(all_paths)} total paths, filtered to {len(filtered_paths)} unique paths")
+        for i, path in enumerate(filtered_paths):
+            print(f"Path {i+1}: {path}")
+        
         return filtered_paths
     
     async def _comprehensive_bfs_search(self, actor1, actor2, max_depth, websocket):
@@ -375,11 +379,19 @@ class ActorConnectionFinder:
         if not all_paths:
             return all_paths
         
+        # First, validate all paths to ensure they make sense
+        valid_paths = []
+        for path in all_paths:
+            if self._validate_path(path):
+                valid_paths.append(path)
+            else:
+                print(f"Invalid path filtered out: {path}")
+        
         used_movies = set()
         filtered_paths = []
         
         # Sort paths by length (shorter paths first) and then by a preference score
-        sorted_paths = sorted(all_paths, key=lambda path: (len(path), self._calculate_path_preference_score(path)))
+        sorted_paths = sorted(valid_paths, key=lambda path: (len(path), self._calculate_path_preference_score(path)))
         
         for path in sorted_paths:
             # Extract movie IDs from this path (odd indices are movies)
@@ -396,6 +408,24 @@ class ActorConnectionFinder:
                     break
         
         return filtered_paths
+    
+    def _validate_path(self, path):
+        """Validate that a path alternates between actors and movies correctly"""
+        if len(path) < 3:
+            return False
+        
+        # Path should alternate: actor -> movie -> actor -> movie -> ...
+        for i in range(len(path)):
+            if i % 2 == 0:  # Should be actor
+                # For now, just check it's not None/empty
+                if not path[i]:
+                    return False
+            else:  # Should be movie
+                if not path[i]:
+                    return False
+        
+        # First and last should be actors
+        return len(path) % 2 == 1
     
     def _calculate_path_preference_score(self, path):
         """Calculate a preference score for path selection (lower is better)"""
