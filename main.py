@@ -138,53 +138,72 @@ class ActorConnectionFinder:
                     "progress": 80
                 }))
                 
-                # Build the complete graph for all found paths
+                # Build the graph from the found paths only
                 all_nodes = {}
                 all_edges = []
                 
-                # Add search actors
-                all_nodes[actor1["id"]] = {"id": actor1["id"], "name": actor1["name"], "type": "search_actor"}
-                all_nodes[actor2["id"]] = {"id": actor2["id"], "name": actor2["name"], "type": "search_actor"}
-                
-                # Build graph from paths
-                total_nodes = sum(len(path) for path in paths)
-                processed_nodes = 0
+                # Process each path to build nodes and edges
+                total_paths = len(paths)
+                processed_paths = 0
                 
                 for path in paths:
+                    if self.search_cancelled:
+                        await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                        return
+                        
                     for i, node_id in enumerate(path):
-                        if self.search_cancelled:
-                            await websocket.send_text(json.dumps({"type": "search_stopped"}))
-                            return
-                            
+                        # Add node if not already added
                         if node_id not in all_nodes:
-                            # Determine if this is a movie or actor
-                            if i % 2 == 0:  # Even indices are actors, odd are movies
+                            # Determine if this is a movie or actor based on position in path
+                            if i % 2 == 0:  # Even indices are actors
                                 # Get actor details
                                 actor_details = await self._get_actor_details(node_id)
                                 if actor_details:
-                                    node_type = "search_actor" if node_id in [actor1["id"], actor2["id"]] else "cast_member"
-                                    all_nodes[node_id] = {"id": node_id, "name": actor_details["name"], "type": node_type}
-                            else:
+                                    # Determine node type
+                                    if node_id == actor1["id"] or node_id == actor2["id"]:
+                                        node_type = "search_actor"
+                                    else:
+                                        node_type = "cast_member"
+                                    all_nodes[node_id] = {
+                                        "id": node_id, 
+                                        "name": actor_details["name"], 
+                                        "type": node_type
+                                    }
+                            else:  # Odd indices are movies
                                 # Get movie details
                                 movie_details = await self._get_movie_details(node_id)
                                 if movie_details:
-                                    all_nodes[node_id] = {"id": node_id, "name": movie_details["title"], "type": "movie"}
+                                    all_nodes[node_id] = {
+                                        "id": node_id, 
+                                        "name": movie_details["title"], 
+                                        "type": "movie"
+                                    }
                         
-                        # Add edges
+                        # Add edge between consecutive nodes in the path
                         if i < len(path) - 1:
-                            edge = {"source": path[i], "target": path[i + 1]}
-                            if edge not in all_edges:
+                            source_id = path[i]
+                            target_id = path[i + 1]
+                            edge = {"source": source_id, "target": target_id}
+                            
+                            # Check if edge already exists (to avoid duplicates)
+                            edge_exists = any(
+                                (e["source"] == source_id and e["target"] == target_id) or
+                                (e["source"] == target_id and e["target"] == source_id)
+                                for e in all_edges
+                            )
+                            
+                            if not edge_exists:
                                 all_edges.append(edge)
-                        
-                        processed_nodes += 1
-                        if processed_nodes % 5 == 0:  # Update progress every 5 nodes
-                            progress = 80 + (processed_nodes / total_nodes) * 15
-                            await websocket.send_text(json.dumps({
-                                "type": "progress",
-                                "message": f"Processing node {processed_nodes}/{total_nodes}",
-                                "stage": "building",
-                                "progress": min(95, progress)
-                            }))
+                    
+                    processed_paths += 1
+                    if processed_paths % 5 == 0:  # Update progress every 5 paths
+                        progress = 80 + (processed_paths / total_paths) * 15
+                        await websocket.send_text(json.dumps({
+                            "type": "progress",
+                            "message": f"Processing path {processed_paths}/{total_paths}",
+                            "stage": "building",
+                            "progress": min(95, progress)
+                        }))
                 
                 await websocket.send_text(json.dumps({
                     "type": "progress",
@@ -193,7 +212,7 @@ class ActorConnectionFinder:
                     "progress": 100
                 }))
                 
-                # Send the complete graph at once
+                # Send the complete graph with only path-related nodes and edges
                 await websocket.send_text(json.dumps({
                     "type": "complete_graph",
                     "nodes": list(all_nodes.values()),
@@ -341,6 +360,8 @@ class ActorConnectionFinder:
             if current_type == "actor":
                 movies = await self.tmdb.get_person_movies(current_id)
                 for movie in movies:
+                    if self.search_cancelled:
+                        return
                     movie_id = movie["id"]
                     
                     if movie_id not in visited_self:
@@ -356,6 +377,8 @@ class ActorConnectionFinder:
             elif current_type == "movie":
                 cast = await self.tmdb.get_movie_cast(current_id)
                 for actor in cast:
+                    if self.search_cancelled:
+                        return
                     actor_id = actor["id"]
                     
                     if actor_id not in visited_self:
