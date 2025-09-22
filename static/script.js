@@ -85,6 +85,9 @@ function handleWebSocketMessage(data) {
         case 'actors_found':
             updateStatus(`Found actors: ${data.actor1.name} and ${data.actor2.name}`);
             clearVisualization();
+            // Add the initial search actors to the graph
+            addNode({...data.actor1, type: 'search_actor'});
+            addNode({...data.actor2, type: 'search_actor'});
             break;
             
         case 'node_added':
@@ -182,10 +185,9 @@ function updateVisualization() {
     const link = g.selectAll('.link')
         .data(links, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
     
-    link.enter()
+    const linkEnter = link.enter()
         .append('line')
-        .attr('class', 'link')
-        .merge(link);
+        .attr('class', 'link');
     
     link.exit().remove();
     
@@ -211,7 +213,6 @@ function updateVisualization() {
             }
         });
     
-    nodeEnter.merge(node);
     node.exit().remove();
     
     // Update labels
@@ -226,7 +227,6 @@ function updateVisualization() {
             return d.name.length > 15 ? d.name.substring(0, 15) + '...' : d.name;
         });
     
-    labelEnter.merge(label);
     label.exit().remove();
     
     // Restart simulation
