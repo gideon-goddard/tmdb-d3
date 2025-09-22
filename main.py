@@ -79,7 +79,7 @@ class TMDBClient:
                 params={"api_key": self.api_key}
             )
             data = response.json()
-            return data.get("cast", [])[:20]  # Limit to top 20 cast members
+            return data.get("cast", [])
 
 class ActorConnectionFinder:
     def __init__(self):
@@ -322,7 +322,7 @@ class ActorConnectionFinder:
             
             if current_type == "actor":
                 movies = await self.tmdb.get_person_movies(current_id)
-                for movie in movies[:20]:  # Increased limit for more thorough search
+                for movie in movies:
                     movie_id = movie["id"]
                     
                     if movie_id not in visited_self:
@@ -337,7 +337,7 @@ class ActorConnectionFinder:
             
             elif current_type == "movie":
                 cast = await self.tmdb.get_movie_cast(current_id)
-                for actor in cast[:25]:  # Increased limit for more thorough search
+                for actor in cast:
                     actor_id = actor["id"]
                     
                     if actor_id not in visited_self:
@@ -375,7 +375,7 @@ class ActorConnectionFinder:
             
             if current_type == "actor":
                 movies = await self.tmdb.get_person_movies(current_id)
-                for movie in movies[:15]:  # Limit movies per actor
+                for movie in movies:
                     movie_id = movie["id"]
                     
                     if movie_id not in visited_self:
@@ -390,7 +390,7 @@ class ActorConnectionFinder:
             
             elif current_type == "movie":
                 cast = await self.tmdb.get_movie_cast(current_id)
-                for actor in cast[:20]:  # Limit cast per movie
+                for actor in cast:
                     actor_id = actor["id"]
                     
                     if actor_id not in visited_self:
