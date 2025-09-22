@@ -22,6 +22,9 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeVisualization();
     setupWebSocket();
     setupAutocomplete();
+    
+    // Initialize button states
+    document.getElementById('stopBtn').disabled = true;
 });
 
 function initializeVisualization() {
@@ -303,6 +306,12 @@ function handleWebSocketMessage(data) {
             updateStatus('Search stopped by user', 'error');
             break;
             
+        case 'search_stopped':
+            searchInProgress = false;
+            hideProgress();
+            updateStatus('Search stopped by user', 'error');
+            break;
+            
         case 'error':
             searchInProgress = false;
             hideProgress();
@@ -331,6 +340,7 @@ function findConnections() {
     updateStatus('Starting search...', 'loading');
     showProgress();
     document.getElementById('searchBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     
@@ -344,6 +354,23 @@ function findConnections() {
     socket.send(JSON.stringify(message));
 }
 
+function stopSearch() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+    
+    searchInProgress = false;
+    
+    const message = {
+        type: 'stop_search'
+    };
+    
+    socket.send(JSON.stringify(message));
+    
+    hideProgress();
+    updateStatus('Stopping search...', 'loading');
+}
+
 function showProgress() {
     document.getElementById('progressContainer').style.display = 'block';
     updateProgressBar(0, 'Initializing...', '');
@@ -352,6 +379,7 @@ function showProgress() {
 function hideProgress() {
     document.getElementById('progressContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
     searchInProgress = false;
 }
 
@@ -399,6 +427,7 @@ function clearVisualization() {
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
     searchInProgress = false;
     
     // Close autocomplete dropdowns
@@ -784,6 +813,18 @@ function saveAsImage() {
             .node-label.highlighted { font-weight: bold; font-size: 12px; fill: #f39c12; }
         `;
         clonedSvg.insertBefore(styleSheet, clonedSvg.firstChild);
+        
+        // Add watermark to the SVG
+        const watermark = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        watermark.setAttribute('x', svgRect.width - 10);
+        watermark.setAttribute('y', svgRect.height - 10);
+        watermark.setAttribute('text-anchor', 'end');
+        watermark.setAttribute('font-family', 'Arial, sans-serif');
+        watermark.setAttribute('font-size', '12');
+        watermark.setAttribute('fill', '#999');
+        watermark.setAttribute('opacity', '0.7');
+        watermark.textContent = 'actors.fromthewestmeadow.com';
+        clonedSvg.appendChild(watermark);
         
         // Create a temporary container
         const tempContainer = document.createElement('div');
