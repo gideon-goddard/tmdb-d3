@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Actor Connection Finder</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Actor Connection Finder</h1>
+            <p>Find the connections between any two actors using TMDB data</p>
+        </header>
+        
+        <div class="controls">
+            <div class="input-group">
+                <div class="input-field">
+                    <label for="actor1">First Actor:</label>
+                    <input type="text" id="actor1" placeholder="e.g., Kevin Bacon">
+                </div>
+                
+                <div class="input-field">
+                    <label for="actor2">Second Actor:</label>
+                    <input type="text" id="actor2" placeholder="e.g., Tom Hanks">
+                </div>
+                
+                <button id="searchBtn" onclick="findConnections()">Find Connections</button>
+            </div>
+            
+            <div class="path-selector" id="pathSelector" style="display: none;">
+                <label for="pathDropdown">Highlight Path:</label>
+                <select id="pathDropdown" onchange="highlightPath()">
+                    <option value="">Select a path to highlight</option>
+                </select>
+            </div>
+            
+            <div class="status" id="status">
+                Enter two actor names to find their connections
+            </div>
+        </div>
+        
+        <div class="visualization-container">
+            <svg id="graph"></svg>
+            
+            <div class="legend">
+                <h3>Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-color search-actor"></div>
+                    <span>Search Actors</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color movie"></div>
+                    <span>Movies</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color cast-member"></div>
+                    <span>Cast Members</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="static/script.js"></script>
+</body>
+</html>
