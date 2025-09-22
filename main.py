@@ -64,8 +64,9 @@ class TMDBClient:
                 )
                 response.raise_for_status()
                 data = response.json()
-                movies = data.get("cast", [])
-                print(f"Found {len(movies)} movies for person {person_id}")
+                # Get both cast and crew movies for comprehensive results
+                movies = data.get("cast", []) + data.get("crew", [])
+                print(f"Found {len(movies)} movies (cast + crew) for person {person_id}")
                 return movies
         except Exception as e:
             print(f"Error getting movies for person {person_id}: {e}")
@@ -73,13 +74,21 @@ class TMDBClient:
     
     async def get_movie_cast(self, movie_id: int) -> List[Dict]:
         """Get cast for a movie"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/movie/{movie_id}/credits",
-                params={"api_key": self.api_key}
-            )
-            data = response.json()
-            return data.get("cast", [])
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/movie/{movie_id}/credits",
+                    params={"api_key": self.api_key}
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Get both cast and crew for comprehensive results
+                people = data.get("cast", []) + data.get("crew", [])
+                print(f"Found {len(people)} people (cast + crew) for movie {movie_id}")
+                return people
+        except Exception as e:
+            print(f"Error getting cast for movie {movie_id}: {e}")
+            return []
 
 class ActorConnectionFinder:
     def __init__(self):
@@ -106,6 +115,10 @@ class ActorConnectionFinder:
             
             actor1 = await self.tmdb.search_person(actor1_name)
             actor2 = await self.tmdb.search_person(actor2_name)
+            
+            if self.search_cancelled:
+                await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                return
             
             if not actor1:
                 await websocket.send_text(json.dumps({"error": f"Actor '{actor1_name}' not found"}))
@@ -137,6 +150,10 @@ class ActorConnectionFinder:
                     "stage": "building",
                     "progress": 80
                 }))
+                
+                if self.search_cancelled:
+                    await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                    return
                 
                 # Build the graph from the found paths only
                 all_nodes = {}
@@ -212,6 +229,10 @@ class ActorConnectionFinder:
                     "progress": 100
                 }))
                 
+                if self.search_cancelled:
+                    await websocket.send_text(json.dumps({"type": "search_stopped"}))
+                    return
+                
                 # Send the complete graph with only path-related nodes and edges
                 await websocket.send_text(json.dumps({
                     "type": "complete_graph",
@@ -252,6 +273,9 @@ class ActorConnectionFinder:
             "progress": 40
         }))
         
+        if self.search_cancelled:
+            return []
+        
         # Look for common movies (direct connection)
         actor1_movie_ids = {movie["id"] for movie in actor1_movies}
         actor2_movie_ids = {movie["id"] for movie in actor2_movies}
@@ -260,7 +284,8 @@ class ActorConnectionFinder:
         all_paths = []
         
         # Add direct connections through shared movies (degree 1)
-        for movie_id in list(common_movies)[:10]:  # Increased limit
+        common_movies_list = list(common_movies)  # Remove limit - get all direct connections
+        for movie_id in common_movies_list:
             all_paths.append([actor1["id"], movie_id, actor2["id"]])
         
         if all_paths:
@@ -270,6 +295,8 @@ class ActorConnectionFinder:
                 "stage": "found",
                 "progress": 50
             }))
+            if self.search_cancelled:
+                return []
         
         # Continue searching for deeper connections if max_depth > 1
         if max_depth > 1 and not self.search_cancelled:
@@ -280,6 +307,9 @@ class ActorConnectionFinder:
                 "progress": 50
             }))
             
+            if self.search_cancelled:
+                return self._filter_duplicate_movies(all_paths)
+            
             deeper_paths = await self._comprehensive_bfs_search(actor1, actor2, max_depth, websocket)
             if not self.search_cancelled:
                 all_paths.extend(deeper_paths)
@@ -287,7 +317,10 @@ class ActorConnectionFinder:
         # Sort paths by degree (length)
         all_paths.sort(key=len)
         
-        return all_paths
+        # Filter out duplicate movies to prevent star formations
+        filtered_paths = self._filter_duplicate_movies(all_paths)
+        
+        return filtered_paths
     
     async def _comprehensive_bfs_search(self, actor1, actor2, max_depth, websocket):
         """Comprehensive bidirectional BFS search for multiple connection paths"""
@@ -315,12 +348,16 @@ class ActorConnectionFinder:
             # Process one level from each side
             if queue1:
                 await self._process_comprehensive_bfs_level(queue1, visited1, visited2, all_paths, "forward", websocket)
+                if self.search_cancelled:
+                    break
             
             if queue2:
                 await self._process_comprehensive_bfs_level(queue2, visited2, visited1, all_paths, "backward", websocket)
+                if self.search_cancelled:
+                    break
             
             # Continue searching even after finding paths to get all possible connections
-            if len(all_paths) > 20:  # Limit total paths to prevent overwhelming
+            if len(all_paths) > 50:  # Increased limit to allow more comprehensive results
                 break
         
         if all_paths:
@@ -332,6 +369,38 @@ class ActorConnectionFinder:
             }))
         
         return all_paths
+    
+    def _filter_duplicate_movies(self, all_paths):
+        """Filter paths to ensure no movie appears in more than one path to prevent star formations"""
+        if not all_paths:
+            return all_paths
+        
+        used_movies = set()
+        filtered_paths = []
+        
+        # Sort paths by length (shorter paths first) and then by a preference score
+        sorted_paths = sorted(all_paths, key=lambda path: (len(path), self._calculate_path_preference_score(path)))
+        
+        for path in sorted_paths:
+            # Extract movie IDs from this path (odd indices are movies)
+            path_movies = set(path[i] for i in range(1, len(path), 2))
+            
+            # Check if any movie in this path is already used
+            if not path_movies.intersection(used_movies):
+                # No conflicts, add this path
+                filtered_paths.append(path)
+                used_movies.update(path_movies)
+                
+                # Limit total paths to prevent overwhelming visualization
+                if len(filtered_paths) >= 10:  # Increased to allow more diverse connections
+                    break
+        
+        return filtered_paths
+    
+    def _calculate_path_preference_score(self, path):
+        """Calculate a preference score for path selection (lower is better)"""
+        # Prefer paths with fewer total nodes (simpler connections)
+        return len(path)
     
     async def _process_comprehensive_bfs_level(self, queue, visited_self, visited_other, all_paths, direction, websocket):
         """Process one BFS level for comprehensive search"""
@@ -356,10 +425,12 @@ class ActorConnectionFinder:
                     "processed": processed_in_level,
                     "total_in_level": level_size
                 }))
+                if self.search_cancelled:
+                    return
             
             if current_type == "actor":
                 movies = await self.tmdb.get_person_movies(current_id)
-                for movie in movies:
+                for movie in movies:  # Process all movies without limit
                     if self.search_cancelled:
                         return
                     movie_id = movie["id"]
@@ -376,7 +447,7 @@ class ActorConnectionFinder:
             
             elif current_type == "movie":
                 cast = await self.tmdb.get_movie_cast(current_id)
-                for actor in cast:
+                for actor in cast:  # Process all cast members without limit
                     if self.search_cancelled:
                         return
                     actor_id = actor["id"]
@@ -416,7 +487,7 @@ class ActorConnectionFinder:
             
             if current_type == "actor":
                 movies = await self.tmdb.get_person_movies(current_id)
-                for movie in movies:
+                for movie in movies:  # Process all movies without limit
                     movie_id = movie["id"]
                     
                     if movie_id not in visited_self:
@@ -431,7 +502,7 @@ class ActorConnectionFinder:
             
             elif current_type == "movie":
                 cast = await self.tmdb.get_movie_cast(current_id)
-                for actor in cast:
+                for actor in cast:  # Process all cast members without limit
                     actor_id = actor["id"]
                     
                     if actor_id not in visited_self:
@@ -511,8 +582,8 @@ async def search_actors(query: str):
             
             # Filter to only include people with known_for_department as Acting
             actors = []
-            for person in data.get("results", [])[:10]:  # Limit to 10 results
-                if person.get("known_for_department") == "Acting" and person.get("popularity", 0) > 1:
+            for person in data.get("results", [])[:20]:  # Increased from 10 to 20 results
+                if person.get("known_for_department") == "Acting" and person.get("popularity", 0) > 0.5:  # Lowered popularity threshold
                     actors.append({
                         "id": person["id"],
                         "name": person["name"],
@@ -548,11 +619,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 print(f"Processing connection request: {actor1} -> {actor2} (depth: {max_depth})")
                 
                 await connection_finder.find_connections(actor1, actor2, max_depth, websocket)
-                
-            elif message["type"] == "stop_search":
-                print("Received stop search request")
-                connection_finder.search_cancelled = True
-                await websocket.send_text(json.dumps({"type": "search_stopped"}))
                 
     except WebSocketDisconnect:
         print("WebSocket disconnected")

@@ -331,8 +331,6 @@ function findConnections() {
     updateStatus('Starting search...', 'loading');
     showProgress();
     document.getElementById('searchBtn').disabled = true;
-    document.getElementById('searchBtn').style.display = 'none';
-    document.getElementById('stopBtn').style.display = 'inline-block';
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     
@@ -346,23 +344,6 @@ function findConnections() {
     socket.send(JSON.stringify(message));
 }
 
-function stopSearch() {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-        return;
-    }
-    
-    searchInProgress = false;
-    
-    const message = {
-        type: 'stop_search'
-    };
-    
-    socket.send(JSON.stringify(message));
-    
-    hideProgress();
-    updateStatus('Stopping search...', 'loading');
-}
-
 function showProgress() {
     document.getElementById('progressContainer').style.display = 'block';
     updateProgressBar(0, 'Initializing...', '');
@@ -371,8 +352,6 @@ function showProgress() {
 function hideProgress() {
     document.getElementById('progressContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
-    document.getElementById('searchBtn').style.display = 'inline-block';
-    document.getElementById('stopBtn').style.display = 'none';
     searchInProgress = false;
 }
 
@@ -420,8 +399,6 @@ function clearVisualization() {
     document.getElementById('pathSelector').style.display = 'none';
     document.getElementById('pathListContainer').style.display = 'none';
     document.getElementById('searchBtn').disabled = false;
-    document.getElementById('searchBtn').style.display = 'inline-block';
-    document.getElementById('stopBtn').style.display = 'none';
     searchInProgress = false;
     
     // Close autocomplete dropdowns
